@@ -140,3 +140,48 @@ class SquadExample:
         self.end_token_idx = end_token_idx
         self.context_token_to_char = tokenized_context.offsets
 
+def create_squad_examples(raw_data, tokenizer):
+    squad_examples = []
+    for item in raw_data["data"]:
+        for para in item["paragraphs"]:
+            context = para["context"]
+            for qa in para["qas"]:
+                question = qa["question"]
+                answer_text = qa["answers"][0]["text"]
+                all_answers = [_["text"] for _ in qa["answers"]]
+                start_char_idx = qa["answers"][0]["answer_start"]
+                squad_eg = SquadExample(
+                    question,
+                    context,
+                    start_char_idx,
+                    answer_text,
+                    all_answers,
+                    tokenizer
+                )
+                squad_eg.preprocess()
+                squad_examples.append(squad_eg)
+    return squad_examples
+
+
+def create_inputs_targets(squad_examples):
+    dataset_dict = {
+        "input_ids": [],
+        "token_type_ids": [],
+        "attention_mask": [],
+        "start_token_idx": [],
+        "end_token_idx": [],
+    }
+    for item in squad_examples:
+        if item.skip == False:
+            for key in dataset_dict:
+                dataset_dict[key].append(getattr(item, key))
+    for key in dataset_dict:
+        dataset_dict[key] = np.array(dataset_dict[key])
+
+    x = [
+        dataset_dict["input_ids"],
+        dataset_dict["token_type_ids"],
+        dataset_dict["attention_mask"],
+    ]
+    y = [dataset_dict["start_token_idx"], dataset_dict["end_token_idx"]]
+    return x, y
