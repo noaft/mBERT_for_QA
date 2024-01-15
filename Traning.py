@@ -54,8 +54,9 @@ slow_tokenizer.save_pretrained(save_path)
 # You can already use the Slow Tokenizer, but its implementation in Rust is much faster.
 tokenizer = BertWordPieceTokenizer('%s/vocab.txt' % save_path, lowercase=True)
 
-# This code is a modified version from https://keras.io/examples/nlp/text_extraction_with_bert/
-class SquadExample:
+#set data prepare traning
+class Visquad_1:
+    #function init for init data format 
     def __init__(
         self,
         question,
@@ -150,7 +151,7 @@ def create_squad_examples(raw_data, tokenizer):
                 answer_text = qa["answers"][0]["text"]
                 all_answers = [_["text"] for _ in qa["answers"]]
                 start_char_idx = qa["answers"][0]["answer_start"]
-                squad_eg = SquadExample(
+                squad_eg = Visquad_1(
                     question,
                     context,
                     start_char_idx,
