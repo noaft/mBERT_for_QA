@@ -186,3 +186,27 @@ def create_inputs_targets(squad_examples):
     ]
     y = [dataset_dict["start_token_idx"], dataset_dict["end_token_idx"]]
     return x, y
+import json
+
+local_dataset_path = '/content/train_ViQuAD.json'
+
+# Check if the file exists
+if not os.path.exists(local_dataset_path):
+    print(f"Dataset file does not exist at: {local_dataset_path}")
+else:
+    # Load the JSON data from the local file
+    with open(local_dataset_path, 'r', encoding='utf-8') as file:
+        dataset_path = json.load(file)
+
+    # Now 'dataset' contains your data, and you can work with it as needed
+    print("Dataset loaded successfully.")
+raw_train_data = {}
+raw_eval_data = {}
+raw_train_data['data'], raw_eval_data['data'] = np.split(np.asarray(dataset_path['data']), [int(.8*len(dataset_path['data']))])
+train_squad_examples = create_squad_examples(raw_train_data, tokenizer)
+x_train, y_train = create_inputs_targets(train_squad_examples)
+print(f"{len(train_squad_examples)} training points created.")
+
+eval_squad_examples = create_squad_examples(raw_eval_data, tokenizer)
+x_eval, y_eval = create_inputs_targets(eval_squad_examples)
+print(f"{len(eval_squad_examples)} evaluation points created.")
