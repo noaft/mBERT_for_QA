@@ -210,3 +210,34 @@ print(f"{len(train_squad_examples)} training points created.")
 eval_squad_examples = create_squad_examples(raw_eval_data, tokenizer)
 x_eval, y_eval = create_inputs_targets(eval_squad_examples)
 print(f"{len(eval_squad_examples)} evaluation points created.")
+def create_model():
+    input_ids = tf.keras.layers.Input(shape=(MAX_LEN,), name='input_ids', dtype=tf.int32)
+    token_type_ids = tf.keras.layers.Input(shape=(MAX_LEN,), name='token_type_ids', dtype=tf.int32)
+    attention_mask = tf.keras.layers.Input(shape=(MAX_LEN,), name='attention_mask', dtype=tf.int32)
+
+    encoder = TFBertModel.from_pretrained(MODEL_NAME)
+    x = encoder(input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
+
+    # Huggingface transformers have multiple outputs, embeddings are the first one,
+    # so let's slice out the first position.
+    x = x[0]
+
+    # Define two outputs
+    start_logits = tf.keras.layers.Dense(1, name='start_logit', use_bias=False)(x)
+    start_logits = tf.keras.layers.Flatten()(start_logits)
+
+    end_logits = tf.keras.layers.Dense(1, name='end_logit', use_bias=False)(x)
+    end_logits = tf.keras.layers.Flatten()(end_logits)
+
+    # Normalize outputs with softmax
+    start_probs = tf.keras.layers.Activation(tf.keras.activations.softmax, name='start_probs')(start_logits)
+    end_probs = tf.keras.layers.Activation(tf.keras.activations.softmax, name='end_probs')(end_logits)
+
+    model = tf.keras.Model(
+        inputs=[input_ids, token_type_ids, attention_mask],
+        outputs=[start_probs, end_probs],
+    )
+    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+    optimizer = tf.keras.optimizers.Adam(lr=2e-5)
+    model.compile(optimizer=optimizer, loss=[loss, loss])
+    return model
