@@ -3,75 +3,34 @@ import re
 import json
 import string
 import numpy as np
-import torch
-import pickle
-
 import tensorflow as tf
-from tensorflow import keras as K
-
+from tensorflow import keras
+from tensorflow.keras import layers
 from tokenizers import BertWordPieceTokenizer
-from transformers import BertTokenizer, TFBertModel
+from transformers import BertTokenizer, TFBertModel, BertConfig
 
-
-### if have TPU, tranning wwith tpu
-# Detect hardware, return appropriate distribution strategy.
-# You can see that it is pretty easy to set up.
-try:
-    # TPU detection: no parameters necessary if TPU_NAME environment
-    # variable is set (always set in Kaggle)
-    tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
-    tf.config.experimental_connect_to_cluster(tpu)
-    tf.tpu.experimental.initialize_tpu_system(tpu)
-    strategy = tf.distribute.experimental.TPUStrategy(tpu)
-    print('Running on TPU ', tpu.master())
-except ValueError:
-    # Default distribution strategy in Tensorflow. Works on CPU and single GPU.
-    strategy = tf.distribute.get_strategy()
-
-print('Number of replicas:', strategy.num_replicas_in_sync)
-
-DATASET_URL = '' #path for dataset train
-MODEL_NAME = 'bert-base-multilingual-cased'
-MAX_LEN = 384 #limit for len in your pargaae
-
-# Set language name to save model
-LANGUAGE = 'Vietnam'
-
-# Depends on whether we are using TPUs or not, increase BATCH_SIZE
-BATCH_SIZE = 8 * strategy.num_replicas_in_sync
-
-# Detect environment
-ARTIFACTS_PATH = 'artifacts/'
-# Import tokenizer from HuggingFace
-slow_tokenizer = BertTokenizer.from_pretrained(MODEL_NAME)
-
-save_path = '%s%s-%s/' % (ARTIFACTS_PATH, LANGUAGE, MODEL_NAME)
+max_len = 384
+configuration = BertConfig()  # default parameters and configuration for BERT
+# Save the slow pretrained tokenizer
+slow_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+save_path = "bert_base_uncased/"
 if not os.path.exists(save_path):
     os.makedirs(save_path)
-
 slow_tokenizer.save_pretrained(save_path)
 
-# You can already use the Slow Tokenizer, but its implementation in Rust is much faster.
-tokenizer = BertWordPieceTokenizer('%s/vocab.txt' % save_path, lowercase=True)
-
-#set data prepare traning
-class Visquad_1:
-    #function init for init data format 
-    def __init__(
-        self,
-        question,
-        context,
-        start_char_idx,
-        answer_text,
-        all_answers,
-        tokenizer
-    ):
+# Load the fast tokenizer from saved file
+tokenizer = BertWordPieceTokenizer("bert_base_uncased/vocab.txt", lowercase=True)
+train_data_url = "https://rajpurkar.github.io/SQuAD-explorer/dataset/train-v1.1.json"
+train_path = keras.utils.get_file("train.json", train_data_url)
+eval_data_url = "https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json"
+eval_path = keras.utils.get_file("eval.json", eval_data_url)
+class SquadExample:
+    def __init__(self, question, context, start_char_idx, answer_text, all_answers):
         self.question = question
         self.context = context
         self.start_char_idx = start_char_idx
         self.answer_text = answer_text
         self.all_answers = all_answers
-        self.tokenizer = tokenizer
         self.skip = False
 
     def preprocess(self):
@@ -80,12 +39,12 @@ class Visquad_1:
         answer_text = self.answer_text
         start_char_idx = self.start_char_idx
 
-        # Fix white spaces
-        context = re.sub(r"\s+", ' ', context).strip()
-        question = re.sub(r"\s+", ' ', question).strip()
-        answer = re.sub(r"\s+", ' ', answer_text).strip()
+        # Clean context, answer and question
+        context = " ".join(str(context).split())
+        question = " ".join(str(question).split())
+        answer = " ".join(str(answer_text).split())
 
-        # Find end token index of answer in context
+        # Find end character index of answer in context
         end_char_idx = start_char_idx + len(answer)
         if end_char_idx >= len(context):
             self.skip = True
@@ -96,7 +55,7 @@ class Visquad_1:
         for idx in range(start_char_idx, end_char_idx):
             is_char_in_ans[idx] = 1
 
-        # Encode context (token IDs, mask and token types)
+        # Tokenize context
         tokenized_context = tokenizer.encode(context)
 
         # Find tokens that were created from answer characters
@@ -113,7 +72,7 @@ class Visquad_1:
         start_token_idx = ans_token_idx[0]
         end_token_idx = ans_token_idx[-1]
 
-        # Encode question (token IDs, mask and token types)
+        # Tokenize question
         tokenized_question = tokenizer.encode(question)
 
         # Create inputs
@@ -125,7 +84,7 @@ class Visquad_1:
 
         # Pad and create attention masks.
         # Skip if truncation is needed
-        padding_length = MAX_LEN - len(input_ids)
+        padding_length = max_len - len(input_ids)
         if padding_length > 0:  # pad
             input_ids = input_ids + ([0] * padding_length)
             attention_mask = attention_mask + ([0] * padding_length)
@@ -141,7 +100,15 @@ class Visquad_1:
         self.end_token_idx = end_token_idx
         self.context_token_to_char = tokenized_context.offsets
 
-def create_squad_examples(raw_data, tokenizer):
+
+with open(train_path) as f:
+    raw_train_data = json.load(f)
+
+with open(eval_path) as f:
+    raw_eval_data = json.load(f)
+
+
+def create_squad_examples(raw_data):
     squad_examples = []
     for item in raw_data["data"]:
         for para in item["paragraphs"]:
@@ -151,13 +118,8 @@ def create_squad_examples(raw_data, tokenizer):
                 answer_text = qa["answers"][0]["text"]
                 all_answers = [_["text"] for _ in qa["answers"]]
                 start_char_idx = qa["answers"][0]["answer_start"]
-                squad_eg = Visquad_1(
-                    question,
-                    context,
-                    start_char_idx,
-                    answer_text,
-                    all_answers,
-                    tokenizer
+                squad_eg = SquadExample(
+                    question, context, start_char_idx, answer_text, all_answers
                 )
                 squad_eg.preprocess()
                 squad_examples.append(squad_eg)
@@ -186,30 +148,16 @@ def create_inputs_targets(squad_examples):
     ]
     y = [dataset_dict["start_token_idx"], dataset_dict["end_token_idx"]]
     return x, y
-import json
 
-local_dataset_path = '/content/train_ViQuAD.json'
 
-# Check if the file exists
-if not os.path.exists(local_dataset_path):
-    print(f"Dataset file does not exist at: {local_dataset_path}")
-else:
-    # Load the JSON data from the local file
-    with open(local_dataset_path, 'r', encoding='utf-8') as file:
-        dataset_path = json.load(file)
-
-    # Now 'dataset' contains your data, and you can work with it as needed
-    print("Dataset loaded successfully.")
-raw_train_data = {}
-raw_eval_data = {}
-raw_train_data['data'], raw_eval_data['data'] = np.split(np.asarray(dataset_path['data']), [int(.8*len(dataset_path['data']))])
-train_squad_examples = create_squad_examples(raw_train_data, tokenizer)
+train_squad_examples = create_squad_examples(raw_train_data)
 x_train, y_train = create_inputs_targets(train_squad_examples)
 print(f"{len(train_squad_examples)} training points created.")
 
-eval_squad_examples = create_squad_examples(raw_eval_data, tokenizer)
+eval_squad_examples = create_squad_examples(raw_eval_data)
 x_eval, y_eval = create_inputs_targets(eval_squad_examples)
 print(f"{len(eval_squad_examples)} evaluation points created.")
+
 def create_model():
     input_ids = tf.keras.layers.Input(shape=(MAX_LEN,), name='input_ids', dtype=tf.int32)
     token_type_ids = tf.keras.layers.Input(shape=(MAX_LEN,), name='token_type_ids', dtype=tf.int32)
@@ -237,7 +185,83 @@ def create_model():
         inputs=[input_ids, token_type_ids, attention_mask],
         outputs=[start_probs, end_probs],
     )
+    optimizer_grouped_parameters = [
+      {'params': [p for p in model.trainable_variables if 'layer' in p.name], 'weight_decay': 0.0},
+      {'params': [p for p in model.trainable_variables if 'layer' not in p.name], 'weight_decay': 0.0}
+    ]
+    # Learning rate và hàm mất mát
+    optimizer = tf.keras.optimizers.Adam(learning_rate=3e-5, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False, name='Adam')
     loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
-    optimizer = tf.keras.optimizers.Adam(lr=2e-5)
-    model.compile(optimizer=optimizer, loss=[loss, loss])
+
+    # Optimizer và compile model
+    model.compile(optimizer=optimizer, loss=loss, metrics=['accuracy'])
+
     return model
+
+use_tpu = True
+if use_tpu:
+    # Create distribution strategy
+    tpu = tf.distribute.cluster_resolver.TPUClusterResolver.connect()
+    strategy = tf.distribute.TPUStrategy(tpu)
+
+    # Create model
+    with strategy.scope():
+        model = create_model()
+else:
+    model = create_model()
+
+model.summary()
+def normalize_text(text):
+    text = text.lower()
+
+    # Remove punctuations
+    exclude = set(string.punctuation)
+    text = "".join(ch for ch in text if ch not in exclude)
+
+    # Remove articles
+    regex = re.compile(r"\b(a|an|the)\b", re.UNICODE)
+    text = re.sub(regex, " ", text)
+
+    # Remove extra white space
+    text = " ".join(text.split())
+    return text
+
+
+class ExactMatch(keras.callbacks.Callback):
+    """
+    Each `SquadExample` object contains the character level offsets for each token
+    in its input paragraph. We use them to get back the span of text corresponding
+    to the tokens between our predicted start and end tokens.
+    All the ground-truth answers are also present in each `SquadExample` object.
+    We calculate the percentage of data points where the span of text obtained
+    from model predictions matches one of the ground-truth answers.
+    """
+
+    def __init__(self, x_eval, y_eval):
+        self.x_eval = x_eval
+        self.y_eval = y_eval
+
+    def on_epoch_end(self, epoch, logs=None):
+        pred_start, pred_end = self.model.predict(self.x_eval)
+        count = 0
+        eval_examples_no_skip = [_ for _ in eval_squad_examples if _.skip == False]
+        for idx, (start, end) in enumerate(zip(pred_start, pred_end)):
+            squad_eg = eval_examples_no_skip[idx]
+            offsets = squad_eg.context_token_to_char
+            start = np.argmax(start)
+            end = np.argmax(end)
+            if start >= len(offsets):
+                continue
+            pred_char_start = offsets[start][0]
+            if end < len(offsets):
+                pred_char_end = offsets[end][1]
+                pred_ans = squad_eg.context[pred_char_start:pred_char_end]
+            else:
+                pred_ans = squad_eg.context[pred_char_start:]
+
+            normalized_pred_ans = normalize_text(pred_ans)
+            normalized_true_ans = [normalize_text(_) for _ in squad_eg.all_answers]
+            if normalized_pred_ans in normalized_true_ans:
+                count += 1
+        acc = count / len(self.y_eval[0])
+        print(f"\nepoch={epoch+1}, exact match score={acc:.2f}")
