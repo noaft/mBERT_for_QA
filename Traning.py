@@ -227,16 +227,9 @@ def normalize_text(text):
     return text
 
 
-class ExactMatch(keras.callbacks.Callback):
-    """
-    Each `SquadExample` object contains the character level offsets for each token
-    in its input paragraph. We use them to get back the span of text corresponding
-    to the tokens between our predicted start and end tokens.
-    All the ground-truth answers are also present in each `SquadExample` object.
-    We calculate the percentage of data points where the span of text obtained
-    from model predictions matches one of the ground-truth answers.
-    """
+# Source: https://keras.io/examples/nlp/text_extraction_with_bert/
 
+class ExactMatch(tf.keras.callbacks.Callback):
     def __init__(self, x_eval, y_eval):
         self.x_eval = x_eval
         self.y_eval = y_eval
@@ -252,6 +245,8 @@ class ExactMatch(keras.callbacks.Callback):
             end = np.argmax(end)
             if start >= len(offsets):
                 continue
+
+            # Get answer from context text
             pred_char_start = offsets[start][0]
             if end < len(offsets):
                 pred_char_end = offsets[end][1]
@@ -259,9 +254,29 @@ class ExactMatch(keras.callbacks.Callback):
             else:
                 pred_ans = squad_eg.context[pred_char_start:]
 
-            normalized_pred_ans = normalize_text(pred_ans)
-            normalized_true_ans = [normalize_text(_) for _ in squad_eg.all_answers]
+            # Normalize answers before comparing prediction and true answers
+            normalized_pred_ans = self._normalize_text(pred_ans)
+            normalized_true_ans = [self._normalize_text(_) for _ in squad_eg.all_answers]
+
+            # If the prediction is contained in the true answer, it counts as a hit
             if normalized_pred_ans in normalized_true_ans:
                 count += 1
+
         acc = count / len(self.y_eval[0])
         print(f"\nepoch={epoch+1}, exact match score={acc:.2f}")
+
+    def _normalize_text(self, text):
+        text = text.lower()
+
+        # Remove punctuations
+        exclude = set(string.punctuation)
+        text = ''.join(ch for ch in text if ch not in exclude)
+
+        # Remove articles
+        regex = re.compile(r"\b(a|an|the)\b", re.UNICODE)
+        text = re.sub(regex, ' ', text)
+
+        # Remove extra white spaces
+        text = re.sub(r"\s+", ' ', text).strip()
+
+        return text
