@@ -280,3 +280,15 @@ class ExactMatch(tf.keras.callbacks.Callback):
         text = re.sub(r"\s+", ' ', text).strip()
 
         return text
+EPOCHS = 8
+
+with strategy.scope():
+    exact_match_callback = ExactMatch(x_eval, y_eval)
+    model.fit(
+        x_train,
+        y_train,
+        epochs=EPOCHS,
+        verbose=1,
+        batch_size=BATCH_SIZE,
+        callbacks=[exact_match_callback],
+    )
