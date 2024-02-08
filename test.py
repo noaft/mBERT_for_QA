@@ -1221,3 +1221,88 @@ def convert_examples_to_features(examples,
             unique_id += 1
 
     return features
+def load_and_cache_examples(args,
+                            tokenizer, 
+                            evaluate=False, 
+                            output_examples=False):
+    
+    # Make sure only the first process in distributed training process the dataset, and the others will use the cache
+    if args["local_rank"] not in [-1, 0] and not evaluate:
+        torch.distributed.barrier()  
+    
+    # Load data features from cache or dataset file
+    input_file = args["predict_file"] if evaluate else args["train_file"]
+    cached_features_file = os.path.join(
+        os.path.dirname(input_file), 
+        'cached_{}_{}_{}'.format(
+            'dev' if evaluate else 'train',
+            list(filter(None, args["model_name_or_path"].split('/'))).pop(),
+            str(args["max_seq_length"])
+        )
+    )
+    
+    if os.path.exists(cached_features_file) and not args["overwrite_cache"] and not output_examples:
+        print("Loading features from cached file %s", cached_features_file)
+        features = torch.load(cached_features_file)
+    else:
+        print("Creating features from dataset file at %s", input_file)
+        
+        # Call `read_squad_examples()`
+        examples = read_squad_examples(input_file=input_file,
+                                       is_training=not evaluate)
+
+        # Call `convert_examples_to_features()`
+        features = convert_examples_to_features(examples, 
+                                                tokenizer, 
+                                                max_seq_length=args["max_seq_length"],
+                                                doc_stride=args["doc_stride"],
+                                                max_query_length=args["max_query_length"],
+                                                is_training=not evaluate,
+                                                cls_token_at_end=False,
+                                                cls_token="[CLS]", 
+                                                sep_token="[SEP]", 
+                                                pad_token=0,
+                                                sequence_a_segment_id=0, # 'pad_token': '[PAD]'
+                                                sequence_b_segment_id=1,
+                                                cls_token_segment_id=0, 
+                                                pad_token_segment_id=0,
+                                                mask_padding_with_zero=True)
+        
+        if args["local_rank"] in [-1, 0]:
+            print("Saving features into cached file %s", cached_features_file)
+            torch.save(features, cached_features_file)
+
+    # Make sure only the first process in distributed training process the dataset, and the others will use the cache
+    if args["local_rank"] == 0 and not evaluate:
+        torch.distributed.barrier()  
+
+    # Convert to Tensors and build dataset
+    all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
+    all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
+    all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
+    all_cls_index = torch.tensor([f.cls_index for f in features], dtype=torch.long)
+    all_p_mask = torch.tensor([f.p_mask for f in features], dtype=torch.float)
+    
+    if evaluate:
+        all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
+        dataset = TensorDataset(all_input_ids, 
+                                all_input_mask, 
+                                all_segment_ids,
+                                all_example_index, 
+                                all_cls_index, 
+                                all_p_mask)
+    else:
+        all_start_positions = torch.tensor([f.start_position for f in features], dtype=torch.long)
+        all_end_positions = torch.tensor([f.end_position for f in features], dtype=torch.long)
+        dataset = TensorDataset(all_input_ids, 
+                                all_input_mask, 
+                                all_segment_ids,
+                                all_start_positions, 
+                                all_end_positions,
+                                all_cls_index, 
+                                all_p_mask)
+
+    if output_examples:
+        return dataset, examples, features
+
+    return dataset
